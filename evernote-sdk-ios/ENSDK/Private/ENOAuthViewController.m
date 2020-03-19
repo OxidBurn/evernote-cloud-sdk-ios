@@ -29,11 +29,11 @@
 #import "ENOAuthViewController.h"
 #import "ENSDKPrivate.h"
 
-@interface ENOAuthViewController() <UIWebViewDelegate>
+@interface ENOAuthViewController() <WKNavigationDelegate>
 
 @property (nonatomic, strong) NSURL *authorizationURL;
 @property (nonatomic, strong) NSString *oauthCallbackPrefix;
-@property (nonatomic, strong) UIWebView *webView;
+@property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, copy) NSString* currentProfileName;
 @property (nonatomic, strong) UIActivityIndicatorView* activityIndicator;
 @property (nonatomic, assign) BOOL isSwitchingAllowed;
@@ -50,7 +50,7 @@
 - (void)dealloc
 {
     self.delegate = nil;
-    self.webView.delegate = nil;
+    self.webView.navigationDelegate = nil;
     [self.webView stopLoading];
 }
 
@@ -85,10 +85,10 @@
     self.activityIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
     [self.activityIndicator setHidesWhenStopped:YES];
     
-    self.webView = [[UIWebView alloc] initWithFrame:self.view.bounds];
+    WKWebViewConfiguration* webViewConfiguration = [self setupWebComponentConfiguration];
+    self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration: webViewConfiguration];
     self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.webView.scalesPageToFit = YES;
-    self.webView.delegate = self;
+    self.webView.navigationDelegate = self;
     [self.view addSubview:self.webView];
     self.activityIndicator.frame = CGRectMake((self.navigationController.view.frame.size.width - (self.activityIndicator.frame.size.width/2))/2,
                                               (self.navigationController.view.frame.size.height - (self.activityIndicator.frame.size.height/2) - 44)/2,
@@ -119,9 +119,9 @@
     [UIView setAnimationTransition:UIViewAnimationTransitionFlipFromLeft
                            forView:[[self navigationController] view]
                              cache:YES];
-    [self.webView setDelegate:nil];
+    self.webView.navigationDelegate = nil;
     // Blank out the web view
-    [self.webView stringByEvaluatingJavaScriptFromString:@"document.open();document.close()"];
+    [self.webView evaluateJavaScript: @"document.open();document.close()" completionHandler: nil];
     self.navigationItem.leftBarButtonItem = nil;
     [UIView commitAnimations];
 }
@@ -150,21 +150,57 @@
 
 - (void)loadWebView {
     [self.activityIndicator startAnimating];
-    [self.webView setDelegate:self];
+    self.webView.navigationDelegate = self;
     [self.webView loadRequest:[NSURLRequest requestWithURL:self.authorizationURL]];
 }
 
-- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation
+- (WKWebViewConfiguration*) setupWebComponentConfiguration
 {
-    return YES;
+    WKUserContentController* userController      = [WKUserContentController new];
+    WKWebViewConfiguration* webViewConfiguration = [WKWebViewConfiguration new];
+    WKPreferences* wkPreference                  = [WKPreferences new];
+    
+    wkPreference.minimumFontSize                       = 12.f;
+    wkPreference.javaScriptEnabled                     = YES;
+    wkPreference.javaScriptCanOpenWindowsAutomatically = NO;
+    
+    if ( [webViewConfiguration respondsToSelector: @selector(ignoresViewportScaleLimits)] )
+        webViewConfiguration.ignoresViewportScaleLimits  = YES;
+    
+    webViewConfiguration.preferences                         = wkPreference;
+    webViewConfiguration.userContentController               = userController;
+    webViewConfiguration.allowsInlineMediaPlayback           = YES;
+    webViewConfiguration.allowsPictureInPictureMediaPlayback = YES;
+    webViewConfiguration.suppressesIncrementalRendering      = YES;
+    
+    if ( [webViewConfiguration respondsToSelector: @selector(mediaTypesRequiringUserActionForPlayback)] )
+        webViewConfiguration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeAll;
+    
+    if ( [webViewConfiguration respondsToSelector: @selector(dataDetectorTypes)] )
+        webViewConfiguration.dataDetectorTypes = WKDataDetectorTypeAll;
+    
+    if (@available(iOS 13.0, *)) {
+        WKWebpagePreferences* preference = [WKWebpagePreferences new];
+        
+        preference.preferredContentMode = WKContentModeRecommended;
+        
+        webViewConfiguration.defaultWebpagePreferences = preference;
+    }
+    
+    [webViewConfiguration.preferences setValue: @YES
+                                        forKey: @"allowFileAccessFromFileURLs"];
+    
+    return webViewConfiguration;
 }
 
-# pragma mark - UIWebViewDelegate
+# pragma mark - WKWebViewNavigationDelegate
 
-- (void)webView:(UIWebView *)webView didFailLoadWithError:(NSError *)error
+- (void)   webView: (WKWebView*)    webView
+ didFailNavigation: (WKNavigation*) navigation
+         withError: (NSError*)      error
 {
     [self.activityIndicator stopAnimating];
-    if ([error.domain isEqualToString:@"WebKitErrorDomain"] && error.code == 102) {
+    if ( [error.domain isEqualToString: @"WebKitErrorDomain"] && error.code == 102) {
         // ignore "Frame load interrupted" errors, which we get as part of the final oauth callback :P
         return;
     }
@@ -181,19 +217,23 @@
     }
 }
 
-- (BOOL)webView:(UIWebView *)webView shouldStartLoadWithRequest:(NSURLRequest *)request navigationType:(UIWebViewNavigationType)navigationType
+- (void)                 webView: (WKWebView*)                         webView
+ decidePolicyForNavigationAction: (WKNavigationAction*)                navigationAction
+                 decisionHandler: (void (^)(WKNavigationActionPolicy)) decisionHandler
 {
-    if ([[request.URL absoluteString] hasPrefix:self.oauthCallbackPrefix]) {
+    if ([[navigationAction.request.URL absoluteString] hasPrefix:self.oauthCallbackPrefix]) {
         // this is our OAuth callback prefix, so let the delegate handle it
         if (self.delegate) {
-            [self.delegate oauthViewController:self receivedOAuthCallbackURL:request.URL];
+            [self.delegate oauthViewController:self receivedOAuthCallbackURL:navigationAction.request.URL];
         }
-        return NO;
+        decisionHandler(WKNavigationActionPolicyCancel);
     }
-    return YES;
+    decisionHandler(WKNavigationActionPolicyAllow);
 }
 
-- (void)webViewDidFinishLoad:(UIWebView *)webView {
+- (void)     webView: (WKWebView*)    webView
+ didFinishNavigation: (WKNavigation*) navigation
+{
     [self.activityIndicator stopAnimating];
 }
 
