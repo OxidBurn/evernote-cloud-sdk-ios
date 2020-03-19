@@ -26,6 +26,8 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#import <WebKit/WebKit.h>
+
 #import "ENSaveToEvernoteViewController.h"
 #import "ENNotebookChooserViewController.h"
 #import "ENNotebookPickerButton.h"
@@ -54,7 +56,7 @@ CGFloat kTextLeftPadding = 20;
 @property (nonatomic, strong) ENNotebookPickerView *notebookPickerView;
 @property (nonatomic, strong) ENNotebookPickerButton * notebookPickerButton;
 @property (nonatomic, strong) RMSTokenView * tagsView;
-@property (nonatomic, strong) UIWebView * noteView;
+@property (nonatomic, strong) WKWebView * noteView;
 
 @property (nonatomic, strong) NSArray * notebookList;
 @property (nonatomic, strong) ENNotebook * currentNotebook;
@@ -102,7 +104,8 @@ CGFloat kTextLeftPadding = 20;
     [divider3 setBackgroundColor:[ENTheme defaultSeparatorColor]];
     [self.view addSubview:divider3];
     
-    UIWebView *noteView = [[UIWebView alloc] initWithFrame:CGRectZero];
+    WKWebViewConfiguration* webViewConfiguration = [self setupWebComponentConfiguration];
+    WKWebView *noteView = [[WKWebView alloc] initWithFrame:CGRectZero configuration: webViewConfiguration];
     noteView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:noteView];
     self.noteView = noteView;
@@ -156,10 +159,11 @@ CGFloat kTextLeftPadding = 20;
         if (!data) {
             return;
         }
-        [self.noteView loadData:data
-                       MIMEType:ENWebArchiveDataMIMEType
-               textEncodingName:ENWebResourceTextEncodingNameUTF8
-                        baseURL:[NSURL new]];
+        
+        [self.noteView loadData: data
+                       MIMEType: ENWebArchiveDataMIMEType
+          characterEncodingName: ENWebResourceTextEncodingNameUTF8
+                        baseURL: [NSURL new]];
     }];
 }
 
@@ -190,6 +194,45 @@ CGFloat kTextLeftPadding = 20;
     chooser.notebookList = self.notebookList;
     chooser.currentNotebook = self.currentNotebook;
     [self.navigationController pushViewController:chooser animated:YES];
+}
+
+- (WKWebViewConfiguration*) setupWebComponentConfiguration
+{
+    WKUserContentController* userController      = [WKUserContentController new];
+    WKWebViewConfiguration* webViewConfiguration = [WKWebViewConfiguration new];
+    WKPreferences* wkPreference                  = [WKPreferences new];
+    
+    wkPreference.minimumFontSize                       = 12.f;
+    wkPreference.javaScriptEnabled                     = YES;
+    wkPreference.javaScriptCanOpenWindowsAutomatically = NO;
+    
+    if ( [webViewConfiguration respondsToSelector: @selector(ignoresViewportScaleLimits)] )
+        webViewConfiguration.ignoresViewportScaleLimits  = YES;
+    
+    webViewConfiguration.preferences                         = wkPreference;
+    webViewConfiguration.userContentController               = userController;
+    webViewConfiguration.allowsInlineMediaPlayback           = YES;
+    webViewConfiguration.allowsPictureInPictureMediaPlayback = YES;
+    webViewConfiguration.suppressesIncrementalRendering      = YES;
+    
+    if ( [webViewConfiguration respondsToSelector: @selector(mediaTypesRequiringUserActionForPlayback)] )
+        webViewConfiguration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeAll;
+    
+    if ( [webViewConfiguration respondsToSelector: @selector(dataDetectorTypes)] )
+        webViewConfiguration.dataDetectorTypes = WKDataDetectorTypeAll;
+    
+    if (@available(iOS 13.0, *)) {
+        WKWebpagePreferences* preference = [WKWebpagePreferences new];
+        
+        preference.preferredContentMode = WKContentModeRecommended;
+        
+        webViewConfiguration.defaultWebpagePreferences = preference;
+    }
+    
+    [webViewConfiguration.preferences setValue: @YES
+                                        forKey: @"allowFileAccessFromFileURLs"];
+    
+    return webViewConfiguration;
 }
 
 #pragma mark - Actions
